@@ -1,0 +1,5 @@
+[book]
+authors = [ ]
+language = "en"
+src = "."
+title = "finix-anywhere - install Finix over SSH"
