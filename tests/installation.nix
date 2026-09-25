@@ -9,7 +9,6 @@ let
         boot.kernelParams = [ "console=ttyS0,115200n8" ];
         services.getty.ttys = [ "ttyS0" ];
         services.openssh.settings = {
-          AuthorizedKeysFile = lib.mkForce ".ssh/authorized_keys";
           PasswordAuthentication = lib.mkForce true;
         };
         users.users.operator = {
@@ -82,13 +81,13 @@ in
     with subtest("install the real Finix closure through the public CLI"):
         deployer.succeed("""
           set -eu
-          mkdir -p /tmp/extra/root/.ssh /tmp/extra/home/operator/.ssh /tmp/extra/var/lib/credentials
-          chmod 700 /tmp/extra/root/.ssh /tmp/extra/home/operator/.ssh /tmp/extra/var/lib/credentials
-          cp ${./modules/ssh-keys/ssh.pub} /tmp/extra/root/.ssh/authorized_keys
-          cp ${./modules/ssh-keys/ssh.pub} /tmp/extra/home/operator/.ssh/authorized_keys
+          mkdir -p /tmp/extra/etc/ssh/authorized_keys /tmp/extra/home/operator/.ssh /tmp/extra/var/lib/credentials
+          chmod 700 /tmp/extra/home/operator/.ssh /tmp/extra/var/lib/credentials
+          cp ${./modules/ssh-keys/ssh.pub} /tmp/extra/etc/ssh/authorized_keys/operator
+          chmod 644 /tmp/extra/etc/ssh/authorized_keys/operator
           printf '%s\\n' persistent-extra-file > /tmp/extra/home/operator/.ssh/secret
           printf '%s' finix-install-password | openssl passwd -6 -stdin > /tmp/extra/var/lib/credentials/operator-password
-          chmod 600 /tmp/extra/root/.ssh/authorized_keys /tmp/extra/home/operator/.ssh/* /tmp/extra/var/lib/credentials/operator-password
+          chmod 600 /tmp/extra/home/operator/.ssh/* /tmp/extra/var/lib/credentials/operator-password
           finix-anywhere \\
             --debug \\
             --build-on local \\
@@ -187,7 +186,8 @@ in
         assert ssh("cat /home/operator/.ssh/secret").stdout.strip() == "persistent-extra-file"
         assert ssh("stat -c %a /home/operator/.ssh/secret").stdout.strip() == "600"
         assert ssh("stat -c %u:%g /home/operator/.ssh/secret").stdout.strip() == "1000:100"
-        assert ssh("stat -c %a /root/.ssh/authorized_keys").stdout.strip() == "600"
+        ssh("test ! -L /etc/ssh/authorized_keys/root")
+        assert ssh("stat -c %a:%u:%g /etc/ssh/authorized_keys/root").stdout.strip() == "600:0:0"
         assert ssh("stat -c %a /var/lib/credentials/operator-password").stdout.strip() == "600"
         shadow_hash = ssh("getent shadow operator | cut -d: -f2").stdout.strip()
         assert shadow_hash == ssh("cat /var/lib/credentials/operator-password").stdout.strip()
@@ -211,7 +211,7 @@ in
                     ssh("${target.config.finit.package}/bin/poweroff", check=False)
                     assert process.wait(timeout=60) == 0
                 except Exception:
-                    print(log_path.read_text())
+                    print(log_path.read_text(errors="replace"))
                     raise
                 finally:
                     if process.poll() is None:

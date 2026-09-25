@@ -2,9 +2,11 @@
 
 ## Scope
 
-The initial deployment target is x86_64 Linux with UEFI firmware, a Limine
-bootloader, a GPT disk, a FAT EFI System Partition, and an ext4 root filesystem.
-The example is deliberately narrower than upstream nixos-anywhere or disko.
+The validated layout uses UEFI firmware, a Limine bootloader, a GPT disk, a FAT
+EFI System Partition, and an ext4 root filesystem. Automated coverage is on
+x86_64; a manual deployment and reboot check also passed on a Hetzner CAX11
+(aarch64). Other hardware is unverified. The example is deliberately narrower
+than upstream nixos-anywhere or disko.
 Packaging the CLI for another host platform does not establish that platform as a
 supported installed system.
 
@@ -34,7 +36,7 @@ for you. See `examples/flake.nix` in the repository.
   flow. Confirm access before deployment; the process reconnects as root in the
   rescue environment.
 - A suitable NixOS installer booted already, or a Linux system able to run the
-  supplied `kexec` rescue image. The default rescue-image path is for x86_64.
+  supplied `kexec` rescue image. The default image is selected for x86_64 or aarch64.
   If `kexec` is unavailable or blocked, boot a NixOS installer through your
   console/provider instead.
 - At least 1 GiB RAM excluding swap for the inherited `kexec` path; actual builds

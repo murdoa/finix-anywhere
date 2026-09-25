@@ -35,11 +35,11 @@ with the Finix deployment contract and boot metadata.
 - [Quickstart](docs/quickstart.md), using the [example flake](examples/flake.nix)
 - [CLI and deployment reference](docs/reference.md)
 
-The initial supported target is **x86_64 Linux, UEFI, Limine, GPT, an EFI System
-Partition, and an ext4 root filesystem**. Other bootloaders, disk layouts,
-architectures, and upstream disko integrations are not established by this
-example. `--vm-test` and NixOS hardware-configuration generation are explicitly
-unsupported; supply a Finix configuration instead.
+The validated layout uses **UEFI, Limine, GPT, an EFI System Partition, and an
+ext4 root filesystem**: automated disk-boot coverage on x86_64 Linux and a manual
+deployment on a Hetzner CAX11 (aarch64). Other bootloaders, disk layouts, and
+hardware remain unverified. `--vm-test` and NixOS hardware-configuration generation
+are explicitly unsupported; supply a Finix configuration instead.
 
 From a checkout, after completing the quickstart preflight:
 
@@ -63,12 +63,21 @@ For a checkout with untracked project files, use
 The check requires an x86_64 Linux builder with KVM. It has passed for the pinned
 configuration: the real CLI installs over SSH, then the installed disk cold-boots
 twice under UEFI without an injected kernel/initrd or shared Nix store. It checks
-Finit as PID 1, authenticated SSH, persistent system profiles and files, host-key
-preservation, file ownership/modes, and password-file credentials.
+Finit as PID 1, authenticated SSH through the example's `/etc/ssh/authorized_keys`
+path, persistent system profiles and files, host-key preservation, file
+ownership/modes, and password-file credentials. Authorized keys are materialized
+as regular files so OpenSSH's `StrictModes` does not traverse `/nix/store`.
 
 `checks.x86_64-linux.cli` exercises rejection of invalid deployments before SSH.
 The installation scenario starts in a NixOS installer; it does not establish
 kexec transition, remote-build, other-architecture, or physical-hardware support.
+
+A manual Hetzner CAX11 deployment also passed the ARM64 kexec transition,
+`--build-on remote`, installation to `/dev/sda`, and UEFI disk boot. SSH using the
+configured user key, Finit as PID 1, the Nix daemon, host-key continuity from
+rescue, and persistent data were verified before and after a subsequent reboot.
+This is a manual cloud result, not automated ARM coverage or a guarantee for
+other Hetzner server types.
 
 ## Provenance and license
 

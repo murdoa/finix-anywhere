@@ -41,8 +41,12 @@ finix.lib.finixSystem {
           AuthorizedKeysFile = "/etc/ssh/authorized_keys/%u";
         };
       };
-      # Public keys may be in the Nix store. Never put a private key here.
-      environment.etc."ssh/authorized_keys/root".source = authorizedKeysFile;
+      # StrictModes follows symlinks and rejects the group-writable Nix store.
+      # Keep the public source in the store, but materialize a root-owned file.
+      environment.etc."ssh/authorized_keys/root" = {
+        source = authorizedKeysFile;
+        mode = "0600";
+      };
 
       programs.limine = {
         enable = true;

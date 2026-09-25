@@ -53,8 +53,12 @@ Review `examples/target.nix` and adapt:
 - The EFI System Partition, root filesystem, and Limine configuration. Keep UEFI
   firmware enabled for this layout.
 - SSH access. The public key file supplies root's authorized keys at
-  `/etc/ssh/authorized_keys/root`; password authentication is disabled. Configure
-  other real accounts or credentials deliberately if required.
+  `/etc/ssh/authorized_keys/root`; password authentication is disabled. The example
+  uses `environment.etc` mode `"0600"` to copy a root-owned file, not symlink it.
+  Keep this explicit mode: OpenSSH's `StrictModes` follows store symlinks and
+  rejects the group-writable `/nix/store` directory. Do not disable `StrictModes`
+  or change Nix store permissions to bypass this check. Configure other real
+  accounts or credentials deliberately if required.
 
 The flake calls `finix.lib.finixSystem` and exports
 `nixosConfigurations.target`. It imports
