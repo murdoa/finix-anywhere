@@ -55,6 +55,8 @@ Nix build, installs Finix, and cold-boots the disk twice under UEFI. It checks
 Finit as PID 1, SSH authentication, host-key preservation, system profiles,
 credentials, file permissions, and persistence. The source VM uses NixOS for the
 test harness; the installed system boots without a shared Nix store.
+SSH login keys are generated per test run. The public-only fixture in
+`tests/fixtures/` checks authorized-key file materialization.
 
 The ARM64 cloud run covered stock Ubuntu 24.04.4, remote builds, native RAM boot,
 disk installation, and a further reboot with SSH and persistent data intact.
