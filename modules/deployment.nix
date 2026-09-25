@@ -1,8 +1,5 @@
-{ config, pkgs, ... }:
+{ config, ... }:
 {
-  # nixos-enter executes the target's sw/bin/bash during bootloader installation.
-  environment.systemPackages = [ pkgs.bash ];
-
   assertions = [
     {
       assertion = config.providers.bootloader.backend != "none";
@@ -21,6 +18,8 @@
   # Carry the installation contract with prebuilt closures as well as flakes.
   boot.bootspec.extensions."org.finix-anywhere.v1" = {
     bootloader = config.providers.bootloader.backend;
+    bootloaderInstall = toString config.providers.bootloader.installHook;
+    tmpfiles = "${config.finit.package}/libexec/finit/tmpfiles";
     hostKeys = config.services.openssh.settings.HostKey or [ ];
   };
 }

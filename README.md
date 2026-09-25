@@ -1,7 +1,7 @@
 # finix-anywhere
 
-Install [Finix](https://github.com/finix-community/finix) over SSH using a NixOS
-rescue environment and disko. This is a focused fork of
+Install [Finix](https://github.com/finix-community/finix) over SSH using a native
+Finix RAM installer and disko. This is a focused fork of
 [nixos-anywhere](https://github.com/nix-community/nixos-anywhere), not a claim that
 all upstream NixOS configurations or deployment integrations work with Finix.
 
@@ -18,16 +18,17 @@ identity.
 ## How it works
 
 1. Connect to the existing machine over SSH with root privileges.
-2. Reuse a suitable NixOS installer, or boot a NixOS rescue image with `kexec`.
+2. Build and boot the native Finix RAM installer with `kexec`, or reuse one already
+   running. Remote builds bootstrap Nix directly on the source OS when necessary.
 3. Run the target's disko script to prepare its disks.
-4. Copy the **Finix** system closure and install it with the rescue environment's
-   `nixos-install --system`.
+4. Copy the Finix system closure, create its system profile, activate it, and
+   install its bootloader in the mounted target.
 5. Boot the installed Finix system.
 
-NixOS is the temporary installation environment, not the installed operating
-system. Finix uses the `nixosConfigurations.<name>` flake output convention. Each
-deployment must import this fork's `nixosModules.default`, which combines disko
-with the Finix deployment contract and boot metadata.
+The default path is **Ubuntu → Finix in RAM → installed Finix**; no NixOS installer
+is involved. Finix uses the `nixosConfigurations.<name>` flake output convention.
+Each deployment must import this fork's `nixosModules.default`, which combines
+disko with the Finix deployment contract and boot metadata.
 
 ## Start here
 
@@ -60,24 +61,28 @@ nix build .#checks.x86_64-linux.installation -L
 For a checkout with untracked project files, use
 `nix build path:.#checks.x86_64-linux.installation -L` instead.
 
-The check requires an x86_64 Linux builder with KVM. It has passed for the pinned
-configuration: the real CLI installs over SSH, then the installed disk cold-boots
-twice under UEFI without an injected kernel/initrd or shared Nix store. It checks
-Finit as PID 1, authenticated SSH through the example's `/etc/ssh/authorized_keys`
-path, persistent system profiles and files, host-key preservation, file
-ownership/modes, and password-file credentials. Authorized keys are materialized
-as regular files so OpenSSH's `StrictModes` does not traverse `/nix/store`.
+The check requires an x86_64 Linux builder with KVM. It exercises the real CLI's
+kexec transition from a systemd source VM into the native Finix RAM installer,
+followed by installation and two UEFI cold boots from disk without an injected
+kernel/initrd or shared Nix store. Assertions cover Finit as PID 1, authenticated
+SSH through the example's `/etc/ssh/authorized_keys` path, persistent profiles and
+files, host-key preservation, file ownership/modes, and password-file credentials.
+Authorized keys are materialized as regular files so OpenSSH's `StrictModes`
+does not traverse `/nix/store`.
 
 `checks.x86_64-linux.cli` exercises rejection of invalid deployments before SSH.
-The installation scenario starts in a NixOS installer; it does not establish
-kexec transition, remote-build, other-architecture, or physical-hardware support.
+The systemd source VM uses NixOS for the test harness; the RAM installer and
+installation commands are native Finix. This is not automated ARM or
+physical-hardware coverage.
+The check also executes an isolated Nix sandbox build inside the RAM installer,
+covering the mounted-root requirement for remote builds.
 
-A manual Hetzner CAX11 deployment also passed the ARM64 kexec transition,
-`--build-on remote`, installation to `/dev/sda`, and UEFI disk boot. SSH using the
-configured user key, Finit as PID 1, the Nix daemon, host-key continuity from
-rescue, and persistent data were verified before and after a subsequent reboot.
-This is a manual cloud result, not automated ARM coverage or a guarantee for
-other Hetzner server types.
+The native path also passed manually on a Hetzner CAX11 (aarch64, 4 GiB), starting
+from stock Ubuntu 24.04.4 with no NixOS installer: source-host Nix bootstrap,
+remote image/build execution, Finix RAM boot, destructive installation to
+`/dev/sda`, and UEFI disk boot. Public-key SSH with the original ed25519 host
+identity, Finit as PID 1, the Nix daemon, and persistent data were verified again
+after a further reboot. Other server types and network layouts remain unverified.
 
 ## Provenance and license
 

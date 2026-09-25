@@ -35,17 +35,26 @@ for you. See `examples/flake.nix` in the repository.
 - Root SSH access, or an account able to elevate with the supported `sudo`/`doas`
   flow. Confirm access before deployment; the process reconnects as root in the
   rescue environment.
-- A suitable NixOS installer booted already, or a Linux system able to run the
-  supplied `kexec` rescue image. The default image is selected for x86_64 or aarch64.
-  If `kexec` is unavailable or blocked, boot a NixOS installer through your
-  console/provider instead.
-- At least 1 GiB RAM excluding swap for the inherited `kexec` path; actual builds
-  and closures may need substantially more. Do not rely on disk swap surviving
-  repartitioning.
-- Wired networking that survives the rescue transition. The tool does not migrate
-  arbitrary Wi-Fi, VPN, VLAN, or static network setup into the default rescue
-  image. Arrange an appropriate custom rescue image or booted installer when
-  needed.
+- A systemd Linux source host such as Ubuntu 24.04, with `iproute2`, a working
+  kexec syscall, and root access; or an already-running native Finix RAM installer.
+  The bundled images support x86_64 and aarch64. Secure Boot/kernel lockdown can
+  prohibit kexec. An ordinary NixOS installer is not the required RAM environment.
+- Remote building bootstraps Nix on the source host if absent; it requires
+  `curl` or `wget`, `tar`, `sha256sum`, writable `/nix`, and Internet access.
+- Sufficient RAM for the unpacked installer closure, builds, and temporary files.
+  Boot temporarily copies the closure into a mounted tmpfs root so Nix sandbox
+  builds can use `pivot_root`, then frees the original image. The exercised VM
+  configuration uses 4 GiB; the inherited 1 GiB preflight floor is not a sizing
+  guarantee. Do not rely on disk swap surviving repartitioning.
+- Physical wired Ethernet, standard routing tables, and an ed25519 host key at
+  `/etc/ssh/ssh_host_ed25519_key`. The launcher restores addresses, main-table
+  routes, MTU, and DNS, matching interfaces by MAC. It rejects addressed bridges,
+  bonds, VLANs, tunnels, Wi-Fi, and policy routing instead of silently dropping
+  their configuration.
+- Authorized keys in `/root/.ssh/authorized_keys` (or the sudo user's standard
+  key file). Custom `AuthorizedKeysCommand` setups are not migrated. SSH keys
+  and network state are appended privately on the source host, not built into
+  the Nix-store image.
 - UEFI firmware for the first supported layout, and console/out-of-band recovery
   access in case networking or boot configuration is incorrect.
 

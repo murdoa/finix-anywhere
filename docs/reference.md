@@ -18,14 +18,15 @@ an instruction to build NixOS. The configuration must import
 
 The module publishes
 `boot.bootspec.extensions."org.finix-anywhere.v1"`, including the selected
-bootloader and SSH `HostKey` paths. The built `boot.json` also records the target
-platform through `org.nixos.bootspec.v1.system`. Do not remove or forge these
-markers to bypass a deployment rejection: they are part of the installer
-contract, not a proof of hardware compatibility.
+bootloader, its `bootloaderInstall` hook, the target's `tmpfiles` executable, and
+SSH `HostKey` paths. The built `boot.json` also records the target platform through
+`org.nixos.bootspec.v1.system`. Do not remove or forge these markers to bypass a
+deployment rejection: they are an installation contract, not hardware validation.
 
-The installer uses the NixOS rescue environment's `nixos-install --system` with
-the **Finix** closure. Rescue OS detection, kexec image selection, and installer
-commands intentionally still refer to NixOS.
+Installation runs entirely in a native Finix RAM environment. The installer
+creates the target system profile, then runs Finix activation, tmpfiles, and the
+bootloader hook in a chroot with private mount and hostname namespaces. The
+target has its own `/run` and Nix store; no `nixos-install` or `nixos-enter` is used.
 
 ## Target, authentication, and rescue
 
@@ -37,7 +38,7 @@ commands intentionally still refer to NixOS.
 | `-p, --ssh-port PORT` | Initial SSH port. |
 | `--ssh-option OPTION` | Add an SSH option without `-o`; repeat as needed. |
 | `--env-password` | Use `SSHPASS` for initial SSH key setup. Treat it as a secret. |
-| `--kexec PATH_OR_URL` | Supply a different NixOS rescue tarball. |
+| `--kexec PATH_OR_URL` | Supply a native Finix installer tarball instead of building the bundled image. |
 | `--force-kexec` | Run kexec even when a suitable installer is detected. |
 | `--kexec-extra-flags FLAGS` | Additional flags passed to kexec. |
 | `--post-kexec-ssh-port PORT` | SSH port after the rescue transition; default 22. |
@@ -48,17 +49,21 @@ not assume adding a later `--ssh-option` restores it; OpenSSH commonly uses the
 first value for an option. Use independently verified targets and a trusted
 network. This tool is not a hardened SSH transport.
 
-A custom rescue image is still an installation environment, not your Finix target
-configuration. It must provide the network and installer tools needed by the
-retained NixOS rescue flow.
+A custom tarball must provide `kexec/run`, accept `--kexec-extra-flags`, and boot
+an SSH-accessible native Finix environment with `/etc/finix-installer` containing
+`1`. NixOS rescue tarballs are not compatible. The bundled launcher requires
+systemd on the source host; `--force-kexec` does not make it a Finit shutdown tool.
 
 ## Building, prebuilt paths, and caches
 
 `--build-on auto|local|remote` controls where builds happen. The default `auto`
 selects a build location based on available platform support. Choose `local` to
 use the local Nix build machinery (including its configured builders), or `remote`
-to build through the target's rescue environment. Remote builds still require a
-locally evaluable configuration and enough resources on the target.
+to build through the target. Remote mode first bootstraps a pinned, checksum-checked
+Nix distribution on the source OS when needed and builds the RAM installer there.
+After kexec, target builds run through the Finix RAM environment. This requires a
+locally evaluable configuration, source-host Internet access, and enough target
+RAM and storage. The bootstrap does not install NixOS or replace the source init.
 
 To prepare both paths explicitly for the initial layout:
 
@@ -99,7 +104,7 @@ reviewed. Cache availability does not replace a matching build platform.
 
 The default is `--phases kexec,disko,install,reboot`:
 
-1. `kexec`: inspect the target and, if needed, transition into NixOS rescue.
+1. `kexec`: inspect the target and, if needed, boot the native Finix RAM installer.
 2. `disko`: prepare and mount disks at `/mnt`. The default mode is destructive.
 3. `install`: copy files and the Finix closure, activate the installation, and
    install its bootloader.
@@ -107,9 +112,10 @@ The default is `--phases kexec,disko,install,reboot`:
 
 The comma-separated list selects phases; execution follows this fixed order,
 not the order in which names are listed. Skipping prerequisites does not recreate
-their state. When omitting `kexec`, prepare the rescue environment and root SSH
-access yourself. When omitting `disko`, ensure the intended filesystems are
-already mounted at `/mnt`.
+their state. When omitting `kexec`, a native Finix installer with root SSH access
+must already be running. An ordinary Ubuntu or installed Finix system is not an
+installation environment. When omitting `disko`, ensure the intended filesystems
+are already mounted at `/mnt`.
 
 To install but leave the machine in rescue for inspection:
 

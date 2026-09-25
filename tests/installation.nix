@@ -1,4 +1,4 @@
-{ pkgs, finix, finix-anywhere, deploymentModule }:
+{ pkgs, finix, finix-anywhere, deploymentModule, ramInstaller }:
 let
   target = import ../examples/target.nix {
     inherit pkgs finix deploymentModule;
@@ -47,19 +47,24 @@ in
       environment.etc = {
         "finix-anywhere/system".source = system;
         "finix-anywhere/disko".source = disko;
+        "finix-anywhere/installer".source = ramInstaller;
       };
       system.activationScripts.install-key = ''
         install -D -m600 ${./modules/ssh-keys/ssh} /root/.ssh/install_key
       '';
     };
 
-    installer = { ... }: {
-      system.nixos.variant_id = "installer";
+    installer = { lib, ... }: {
+      virtualisation.memorySize = lib.mkForce 4096;
       services.openssh = {
         enable = true;
         settings.PasswordAuthentication = false;
         hostKeys = [{ path = "/etc/ssh/ssh_host_ed25519_key"; type = "ed25519"; }];
       };
+      system.activationScripts.source-key = ''
+        install -d -m700 /root/.ssh
+        install -m600 ${./modules/ssh-keys/ssh.pub} /root/.ssh/authorized_keys
+      '';
       users.users.root.openssh.authorizedKeys.keyFiles = [ ./modules/ssh-keys/ssh.pub ];
       # /dev/vda belongs to the rescue VM; only this initially blank disk is erased.
       virtualisation.emptyDiskImages = [ 6144 ];
@@ -67,6 +72,7 @@ in
   };
 
   testScript = ''
+    import shlex
     import shutil
     import socket
     import subprocess
@@ -92,17 +98,25 @@ in
             --debug \\
             --build-on local \\
             --phases kexec,disko,install \\
+            --kexec /etc/finix-anywhere/installer/finix-installer.tar.gz \\
+            --no-substitute-on-destination \\
             --store-paths /etc/finix-anywhere/disko /etc/finix-anywhere/system \\
             --extra-files /tmp/extra \\
             --chown /home/operator 1000:100 \\
             --copy-host-keys \\
             -i /root/.ssh/install_key \\
             root@installer </dev/null >&2
-        """, timeout=300)
-        installer.succeed("test -f /mnt/boot/EFI/BOOT/BOOTX64.EFI")
-        installer.succeed("test $(readlink -f /mnt/nix/var/nix/profiles/system) = ${system}")
-        installer.succeed("sync")
-        installer.shutdown()
+        """, timeout=600)
+        # kexec replaces the original VM's test backdoor with native Finix.
+        deployer.succeed("ssh -i /root/.ssh/install_key -o StrictHostKeyChecking=no root@installer '. /etc/os-release; test \"$ID\" = finix; test \"$(cat /etc/finix-installer)\" = 1; test -f /mnt/boot/EFI/BOOT/BOOTX64.EFI'")
+        deployer.succeed("ssh -i /root/.ssh/install_key -o StrictHostKeyChecking=no root@installer 'test $(readlink -f /mnt/nix/var/nix/profiles/system) = ${system}; sync'")
+        # Real remote builds must work in RAM, not just closure copies. In
+        # particular, Nix cannot pivot its sandbox out of the initial rootfs.
+        probe = 'builtins.derivation { name = "finix-ram-sandbox"; system = "${pkgs.stdenv.hostPlatform.system}"; builder = builtins.storePath "${pkgs.bash}" + "/bin/bash"; args = [ "-c" "printf native-sandbox > $out" ]; }'
+        build_probe = "set -e; output=$(nix-build --no-out-link --option sandbox true --option substitute false --expr " + shlex.quote(probe) + '); test "$(cat "$output")" = native-sandbox'
+        deployer.succeed("ssh -i /root/.ssh/install_key -o StrictHostKeyChecking=no root@installer " + shlex.quote(build_probe))
+        deployer.succeed("ssh -i /root/.ssh/install_key -o StrictHostKeyChecking=no root@installer 'poweroff' || test $? = 255")
+        installer.wait_for_shutdown()
         deployer.shutdown()
 
     disk = installer.state_dir / "empty0.qcow2"

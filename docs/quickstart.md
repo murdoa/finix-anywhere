@@ -59,15 +59,15 @@ Review `examples/target.nix` and adapt:
   rejects the group-writable `/nix/store` directory. Do not disable `StrictModes`
   or change Nix store permissions to bypass this check. Configure other real
   accounts or credentials deliberately if required.
+- Login shells. The example imports and enables Finix's Bash module because
+  root's configured shell resolves through the system profile. The deployment
+  module does not inject a shell into arbitrary target configurations.
 
 The flake calls `finix.lib.finixSystem` and exports
 `nixosConfigurations.target`. It imports
 `finix-anywhere.nixosModules.default`, which combines the disko integration with
 this fork's deployment assertions and metadata. Keep that import. A stock NixOS
 configuration or generated NixOS hardware module is not a replacement.
-
-The deployment module also includes Bash in the target system profile because
-`nixos-enter` requires it during installation; this does not select your login shell.
 
 ## 3. Verify rescue access and build the paths
 
@@ -78,10 +78,10 @@ ssh root@TARGET_IP
 ```
 
 Replace `TARGET_IP` everywhere with the verified target. Inspect its disks with
-`lsblk`, confirm UEFI mode, and check that the rescue transition can retain network
-access. If not already in a suitable NixOS installer, the tool may replace the
-running OS with a NixOS rescue image using `kexec`. If kexec is unavailable, boot a
-NixOS installer manually first.
+`lsblk`, confirm UEFI mode, and check the RAM installer's networking requirements.
+The default path starts from a systemd Linux host such as stock Ubuntu 24.04 and
+uses `kexec` to boot Finix in RAM. No NixOS installer step is required. Kernel
+lockdown or a disabled kexec syscall prevents this path.
 
 **Do not rely on installer SSH to verify the host:** its inherited options disable
 strict host-key verification and ignore the persistent known-hosts database.
@@ -113,9 +113,8 @@ connection. That option does not provision an authorized key in the new system.
 The existing host can also be addressed using an account with supported privilege
 elevation; ensure root access in rescue will work.
 
-The normal sequence is rescue/kexec, destructive disko, Finix installation, and
-reboot. NixOS commands in the logs refer to the rescue installer. The system
-passed to `nixos-install --system` is the built Finix closure.
+The normal sequence is native Finix RAM boot, destructive disko, Finix activation
+and bootloader installation, then reboot into the installed Finix system.
 
 For a host unable to build x86_64 Linux locally, select `--build-on remote` and
 ensure the rescue environment has sufficient RAM, storage, and cache/build

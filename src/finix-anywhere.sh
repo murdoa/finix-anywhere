@@ -52,13 +52,9 @@ isArch=
 isInstaller=
 isContainer=
 isRoot=
-hasIpv6Only=
 hasTar=
-hasCpio=
 hasSudo=
 hasDoas=
-hasWget=
-hasCurl=
 hasSetsid=
 
 tempDir=$(mktemp -d -t finix-anywhere.XXXXXXXXXX)
@@ -99,7 +95,7 @@ Options:
   set the store paths to the disko-script and Finix system directly
   if this is given, flake is not needed
 * --kexec <path>
-  use another kexec tarball to bootstrap NixOS
+  use a custom native Finix installer tarball instead of building the bundled image
 * --force-kexec
   don't check if we're in the installer, run kexec anyway
 * --kexec-extra-flags
@@ -426,7 +422,7 @@ preflight() {
     if [[ ! -f ${nixosSystem}/nixos-version ]] || [[ $(cat "${nixosSystem}/nixos-version") != finix ]]; then
       abort "--store-paths requires a Finix system closure (nixos-version must be finix)"
     fi
-    for path in kernel initrd init activate sw/bin/bash; do
+    for path in kernel initrd init activate; do
       if [[ ! -e ${nixosSystem}/${path} ]]; then
         abort "Finix system closure is missing ${path}; a bootable deployment is required"
       fi
@@ -451,6 +447,12 @@ preflight() {
     abort "Finix deployment metadata is missing a valid host platform"
   fi
   machineSystem=$(jq -r '.system' <<<"$metadata")
+  if [[ ${phases[install]} == 1 ]] && ! jq -e '
+    .deployment | [.bootloaderInstall, .tmpfiles] |
+    all(.[]; type == "string" and startswith("/nix/store/"))
+  ' <<<"$metadata" >/dev/null; then
+    abort "Missing native Finix installation hooks. Rebuild the target with finix-anywhere.nixosModules.default."
+  fi
   substituters=$(jq -r '.substituters // ""' <<<"$metadata")
   trustedPublicKeys=$(jq -r '.trustedPublicKeys // ""' <<<"$metadata")
 
@@ -602,7 +604,7 @@ importFacts() {
 
   # Necessary to prevent Bash erroring before printing out which fact had an issue
   set +u
-  for var in isOs isArch isInstaller isContainer isRoot hasIpv6Only hasTar hasCpio hasSudo hasDoas hasWget hasCurl hasSetsid; do
+  for var in isOs isArch isInstaller isContainer isRoot hasTar hasSudo hasDoas hasSetsid; do
     if [[ -z ${!var} ]]; then
       abort "Failed to retrieve fact $var from host"
     fi
@@ -656,146 +658,92 @@ checkBuildLocally() {
   buildOn=remote
 }
 
+# shellcheck disable=SC2016
+# Quoted SSH programs deliberately expand HOME on the source host, not here.
 runKexec() {
-  if [[ ${isInstaller} == "y" ]] && [[ ${forceKexec} != "true" ]]; then
+  if [[ ${isInstaller} == "y" && ${forceKexec} != "true" ]]; then
     return
   fi
-
+  case "${isArch}" in
+    x86_64 | aarch64) ;;
+    *) abort "Native Finix installers support x86_64 and aarch64 Linux" ;;
+  esac
   if [[ ${isContainer} != "none" ]]; then
-    echo "WARNING: This script does not support running from a '${isContainer}' container. kexec will likely not work" >&2
+    abort "Cannot boot a native installer from a ${isContainer} container"
   fi
 
-  if [[ $kexecUrl == "" ]]; then
-    case "${isArch}" in
-    x86_64 | aarch64)
-      kexecUrl="https://github.com/nix-community/nixos-images/releases/download/nixos-25.11/nixos-kexec-installer-noninteractive-${isArch}-linux.tar.gz"
-      ;;
-    *)
-      abort "Unsupported architecture: ${isArch}. Our default kexec images only support x86_64 and aarch64 CPUs. Check out https://nix-community.github.io/nixos-anywhere/howtos/custom-kexec.html for more information."
-      ;;
-    esac
-  fi
-
-  step Switching system into kexec
-
-  # no way to reach global ipv4 destinations, use gh-v6.com automatically if github url
-  if [[ ${hasIpv6Only} == "y" ]] && [[ $kexecUrl == "https://github.com/"* ]]; then
-    kexecUrl=${kexecUrl/"github.com"/"gh-v6.com"}
-  fi
-
-  # Handle kexec operation failures
-  handleKexecFailure() {
-    local operation=$1
-
-    # Try to fetch the log file
-    local logContent=""
-    if logContent=$(
-      set +x
-      # shellcheck disable=SC2016 # We want $HOME to expand on the remote server
-      runSsh 'cat "$HOME/kexec/finix-anywhere.log" 2>/dev/null' 2>/dev/null
-    ); then
-      echo "Remote output log:" >&2
-      echo "$logContent" >&2
+  local image remoteImage="" daemon daemonWrapper bootstrapSettings oldBoot newBoot deadline
+  oldBoot=$(runSshNoTty cat /proc/sys/kernel/random/boot_id)
+  runSsh 'mkdir -p "$HOME/kexec"'
+  if [[ -z $kexecUrl ]]; then
+    if ! runSshNoTty 'test -d /run/systemd/system'; then
+      abort "The bundled loader requires a systemd source OS such as stock Ubuntu for orderly kexec; an existing Finix RAM installer should be reused without --force-kexec"
     fi
-    echo "$operation failed" >&2
-    exit 1
-  }
-
-  # Define common remote commands template
-  local remoteCommandTemplate
-  remoteCommandTemplate="
-# Run kexec commands with sudo if needed
-{
-  set -eu ${enableDebug}
-  cd \"\$HOME/kexec\"
-  echo Downloading kexec tarball, this may take a moment...
-  # Execute tar command
-  %TAR_COMMAND%
-  TMPDIR=\"\$HOME/kexec\" ${maybeSudo} setsid --wait \"\$HOME/kexec/kexec/run\" --kexec-extra-flags $(printf '%q' "$kexecExtraFlags")
-} 2>&1 | tee \"\$HOME/kexec/finix-anywhere.log\" || true
-
-# The script will likely disconnect us, so we consider it successful if we see the kexec message
-if ! grep -q 'machine will boot into nixos' \"\$HOME/kexec/finix-anywhere.log\"; then
-  echo 'Kexec may have failed - check output above'
-  exit 1
-fi
-"
-
-  # Define upload commands
-  local localUploadCommand=()
-  local remoteUploadCommand=()
-
-  # gnu tar cannot automatically detect the compression when decompressing via stdin
-  tarDecomp=""
-  if [[ ${kexecUrl} =~ \.tar\.gz$ ]]; then
-    tarDecomp="--gzip"
-  elif [[ ${kexecUrl} =~ \.tar\.xz$ ]]; then
-    tarDecomp="--xz"
-  elif [[ ${kexecUrl} =~ \.tar\.zst$ ]]; then
-    tarDecomp="--zstd"
-  elif [[ ${kexecUrl} =~ \.tar$ ]]; then
-    tarDecomp=""
-  fi
-
-  if [[ -f $kexecUrl ]]; then
-    localUploadCommand=(cat "$kexecUrl")
-  elif [[ $hasWget == "y" ]]; then
-    remoteUploadCommand=(wget "$kexecUrl" -O-)
-  elif [[ $hasCurl == "y" ]]; then
-    remoteUploadCommand=(curl --fail -Ss -L "$kexecUrl")
-  else
-    # Fallback to local curl
-    localUploadCommand=(curl --fail -Ss -L "${kexecUrl}")
-  fi
-
-  # Determine the tar command based on upload method
-  local tarCommand
-  if [[ ${#localUploadCommand[@]} -eq 0 ]]; then
-    # Use remote command for download
-    tarCommand="$(printf '%q ' "${remoteUploadCommand[@]}") | tar -xv ${tarDecomp}"
-  else
-    # Use local file for extraction
-    tarCommand="cat \"\$HOME/kexec/kexec-tarball.tar.gz\" | tar -xv ${tarDecomp}"
-  fi
-
-  local remoteCommands
-  remoteCommands=${remoteCommandTemplate//'%TAR_COMMAND%'/$tarCommand}
-
-  # Create and execute the script on the remote system
-  # shellcheck disable=SC2016 # We want $HOME to expand on the remote server
-  runSsh 'mkdir -p "$HOME/kexec" && cat > "$HOME/kexec/finix-anywhere-kexec.sh"' <<EOF
-$remoteCommands
+    if [[ ${buildOn} == "remote" ]]; then
+      step Bootstrapping Nix on the source OS to build the native RAM installer
+      daemon=$(runSshNoTty "${maybeSudo} sh -s" <"$here/bootstrap-nix.sh")
+      if [[ ! $daemon =~ ^/[^[:space:]]+/nix-daemon$ ]]; then
+        abort "Nix bootstrap did not return an absolute nix-daemon executable"
+      fi
+      bootstrapSettings="experimental-features = nix-command flakes
+build-users-group =
+extra-substituters = ${substituters}
+extra-trusted-public-keys = ${trustedPublicKeys}"
+      daemonWrapper=$(runSshNoTty 'printf "%s\n" "$HOME/kexec/nix-daemon"')
+      # The wrapper preserves sudo/doas access without requiring root SSH on Ubuntu.
+      runSshNoTty 'cat > "$HOME/kexec/nix-daemon"; chmod 700 "$HOME/kexec/nix-daemon"' <<EOF
+#!/bin/bash
+exec ${maybeSudo} env $(printf '%q' "NIX_CONFIG=$bootstrapSettings") $(printf '%q' "$daemon") "\$@"
 EOF
-  if [[ ${#localUploadCommand[@]} -gt 0 ]]; then
-    # Upload the kexec tarball first
-    # shellcheck disable=SC2016 # We want $HOME to expand on the remote server
-    "${localUploadCommand[@]}" | runSsh 'cat > "$HOME/kexec/kexec-tarball.tar.gz"'
+      daemonWrapper=$(jq -rn --arg path "$daemonWrapper" '$path | @uri')
+      step Building the native Finix RAM installer on the source OS
+      image=$(nixBuild "${FINIX_ANYWHERE_FLAKE}#packages.${isArch}-linux.installer" \
+        --eval-store auto \
+        --store "ssh-ng://$sshConnection?ssh-key=$tempDir%2Ffinix-anywhere&remote-program=$daemonWrapper&$sshStoreSettings")
+      remoteImage="$image/finix-installer.tar.gz"
+    else
+      step Building the native Finix RAM installer locally
+      image=$(nixBuild "${FINIX_ANYWHERE_FLAKE}#packages.${isArch}-linux.installer")
+      kexecUrl="$image/finix-installer.tar.gz"
+    fi
   fi
-  # shellcheck disable=SC2016 # We want $HOME to expand on the remote server
-  runSsh 'bash "$HOME/kexec/finix-anywhere-kexec.sh"' || handleKexecFailure "Kexec"
 
-  # use the default SSH port to connect at this point
-  local i
+  step Booting the native Finix RAM installer
+  if [[ -n $remoteImage ]]; then
+    runSsh "tar -xf $(printf '%q' "$remoteImage") -C \"\$HOME/kexec\""
+  elif [[ -f $kexecUrl ]]; then
+    runSshNoTty 'cat > "$HOME/kexec/installer.tar"' <"$kexecUrl"
+    runSsh 'tar -xf "$HOME/kexec/installer.tar" -C "$HOME/kexec"'
+  else
+    # Fetch on the controller, so the source host needs no particular downloader.
+    curl --fail --silent --show-error --location "$kexecUrl" |
+      runSshNoTty 'cat > "$HOME/kexec/installer.tar"'
+    runSsh 'tar -xf "$HOME/kexec/installer.tar" -C "$HOME/kexec"'
+  fi
+  # Keep diagnostics on the source host if loading the kernel fails.
+  runSsh "set -o pipefail; ${maybeSudo} setsid --wait \"\$HOME/kexec/kexec/run\" --kexec-extra-flags $(printf '%q' "$kexecExtraFlags") 2>&1 | tee \"\$HOME/kexec/finix-anywhere.log\""
+
+  local i foundPort=n
   for i in "${!sshArgs[@]}"; do
     if [[ ${sshArgs[i]} == "-p" ]]; then
       sshArgs[i + 1]=$postKexecSshPort
+      foundPort=y
       break
     fi
   done
-
-  # wait for machine to become unreachable.
-  while runSshTimeout -- exit 0; do sleep 1; done
-
-  # After kexec we explicitly set the user to root@
+  if [[ $foundPort == n ]]; then sshArgs+=("-p" "$postKexecSshPort"); fi
   sshConnection="root@${sshHost}"
-
-  # waiting for machine to become available again
-  until runSsh -o ConnectTimeout=10 -- exit 0; do sleep 5; done
-
+  deadline=$((SECONDS + 300))
+  until newBoot=$(runSshTimeout cat /proc/sys/kernel/random/boot_id) &&
+    [[ $newBoot != "$oldBoot" ]]; do
+    if (( SECONDS >= deadline )); then
+      abort "Native installer did not become reachable within 300 seconds; inspect the target console"
+    fi
+    sleep 5
+  done
   importFacts
-
-  if [[ ${isInstaller} == "n" ]]; then
-    abort "Failed to kexec into NixOS installer"
+  if [[ ${isInstaller} != "y" ]]; then
+    abort "Target rebooted, but is not running the native Finix RAM installer"
   fi
 }
 
@@ -859,24 +807,9 @@ finixInstall() {
     installHostKeys
   fi
 
-  step Installing Finix
-  runSsh sh <<SSH
-set -eu ${enableDebug}
-# when running not in nixos we might miss this directory, but it's needed in the nixos chroot during installation
-export PATH="\$PATH:/run/current-system/sw/bin"
-
-if [ ! -d "/mnt/tmp" ]; then
-  # needed for installation if initrd-secrets are used
-  mkdir -p /mnt/tmp
-  chmod 777 /mnt/tmp
-fi
-
-# https://stackoverflow.com/a/13864829
-if [ ! -z ${NIXOS_NO_CHECK+0} ]; then
-  export NIXOS_NO_CHECK
-fi
-nixos-install --no-root-passwd --no-channel-copy --system "$nixosSystem"
-SSH
+  step Installing Finix with native activation and bootloader hooks
+  runSshNoTty 'umask 077; cat > /tmp/finix-anywhere-install.sh' <"$here/install-system.sh"
+  runSsh bash /tmp/finix-anywhere-install.sh "$nixosSystem"
 
 }
 
@@ -944,10 +877,6 @@ main() {
     abort "no tar command found, but required to unpack kexec tarball"
   fi
 
-  if [[ ${hasCpio-n} == "n" ]]; then
-    abort "no cpio command found, but required to build the new initrd"
-  fi
-
   if [[ ${hasSetsid-n} == "n" ]]; then
     abort "no setsid command respecting --wait found, but required to run the kexec script under a new session"
   fi
@@ -962,6 +891,9 @@ main() {
 
   if [[ ${phases[kexec]} == 1 ]]; then
     runKexec
+  fi
+  if [[ ${isInstaller} != "y" && ( ${phases[disko]} == 1 || ${phases[install]} == 1 ) ]]; then
+    abort "Disk and install phases require the native Finix RAM installer; include the kexec phase"
   fi
 
   # Installation will fail if non-root user is used for installer.

@@ -1,5 +1,5 @@
 {
-  description = "Install Finix over SSH using a NixOS rescue environment";
+  description = "Install Finix over SSH using a native Finix RAM installer";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/8ce4ef6cb6f871616146b9fe26d2a5ae594e94fe";
@@ -22,9 +22,11 @@
       };
 
       packages = eachSystem (pkgs: {
-        finix-anywhere = pkgs.callPackage ./src { };
+        finix-anywhere = pkgs.callPackage ./src { installerFlake = self.outPath; };
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.finix-anywhere;
         docs = pkgs.callPackage ./docs { };
+      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        installer = import ./installer { inherit pkgs; inherit (inputs) finix; };
       });
 
       devShells = eachSystem (pkgs: {
@@ -46,6 +48,7 @@
           inherit pkgs inputs;
           finix-anywhere = self.packages.${pkgs.stdenv.hostPlatform.system}.finix-anywhere;
           deploymentModule = self.nixosModules.default;
+          ramInstaller = self.packages.${pkgs.stdenv.hostPlatform.system}.installer;
         }
       ));
     };

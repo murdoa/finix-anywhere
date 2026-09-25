@@ -48,14 +48,14 @@ runCase reject --vm-test
 runCase reject --generate-hardware-config nixos-generate-config "$work/hardware.nix"
 
 printf 'finix\n' >"$work/system/nixos-version"
-mkdir -p "$work/system/sw/bin"
-touch "$work/system/sw/bin/bash"
 touch "$work/disko" "$work/system/kernel" "$work/system/initrd" "$work/system/init" "$work/system/activate"
 cat >"$work/valid-boot.json" <<'JSON'
 {
   "org.nixos.bootspec.v1": { "system": "x86_64-linux" },
   "org.finix-anywhere.v1": {
     "bootloader": "limine",
+    "bootloaderInstall": "/nix/store/test-bootloader/install",
+    "tmpfiles": "/nix/store/test-finit/libexec/finit/tmpfiles",
     "hostKeys": ["/var/lib/sshd/ssh_host_ed25519_key"]
   }
 }
@@ -76,6 +76,10 @@ touch "$work/system/kernel"
 jq 'del(."org.finix-anywhere.v1")' "$work/valid-boot.json" >"$work/system/boot.json"
 runCase reject "${storeArgs[@]}"
 jq '."org.finix-anywhere.v1".bootloader = "none"' "$work/valid-boot.json" >"$work/system/boot.json"
+runCase reject "${storeArgs[@]}"
+jq 'del(."org.finix-anywhere.v1".bootloaderInstall)' "$work/valid-boot.json" >"$work/system/boot.json"
+runCase reject "${storeArgs[@]}"
+jq 'del(."org.finix-anywhere.v1".tmpfiles)' "$work/valid-boot.json" >"$work/system/boot.json"
 runCase reject "${storeArgs[@]}"
 jq 'del(."org.nixos.bootspec.v1".system)' "$work/valid-boot.json" >"$work/system/boot.json"
 runCase reject "${storeArgs[@]}"
@@ -104,6 +108,8 @@ cat >"$work/flake/flake.nix" <<'NIX'
         };
         boot.bootspec.extensions."org.finix-anywhere.v1" = {
           bootloader = "limine";
+          bootloaderInstall = "/nix/store/test-bootloader/install";
+          tmpfiles = "/nix/store/test-finit/libexec/finit/tmpfiles";
           hostKeys = [ "/var/lib/sshd/ssh_host_ed25519_key" ];
         };
       };

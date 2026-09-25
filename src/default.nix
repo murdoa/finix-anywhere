@@ -15,6 +15,7 @@
 , lib
 , makeWrapper
 , mkShellNoCC
+, installerFlake
 }:
 let
   runtimeDeps = [
@@ -42,6 +43,7 @@ stdenv.mkDerivation {
     # We prefer the system's openssh over our own, since it might come with features not present in ours:
     # https://github.com/nix-community/nixos-anywhere/issues/62
     makeShellWrapper $out/libexec/finix-anywhere/finix-anywhere.sh $out/bin/finix-anywhere \
+      --set FINIX_ANYWHERE_FLAKE ${lib.escapeShellArg "path:${toString installerFlake}"} \
       --prefix PATH : ${lib.makeBinPath runtimeDeps} --suffix PATH : ${lib.makeBinPath [ openssh ]}
   '';
 
@@ -51,7 +53,7 @@ stdenv.mkDerivation {
   };
 
   meta = with lib; {
-    description = "Install Finix over SSH using a NixOS rescue environment";
+    description = "Install Finix over SSH using a native Finix RAM installer";
     license = licenses.mit;
     mainProgram = "finix-anywhere";
     platforms = platforms.unix;

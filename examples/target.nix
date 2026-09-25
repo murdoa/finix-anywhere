@@ -17,9 +17,13 @@ finix.lib.finixSystem {
     finix.nixosModules.nix-daemon
     finix.nixosModules.ifupdown-ng
     finix.nixosModules.limine
+    finix.nixosModules.bash
     ({ lib, ... }: {
       nixpkgs.pkgs = pkgs;
       networking.hostName = "finix-target";
+
+      # Finix user shells refer to the system profile; enable root's login shell.
+      programs.bash.enable = true;
 
       # The default Finix module imports mdevd; these other services are opt-in.
       services.getty.enable = true;
