@@ -1,5 +1,11 @@
 # finix-anywhere
 
+> [!NOTE]
+> This was a fun project during **NixCon 2026**.
+> [nixos-anywhere](https://github.com/nix-community/nixos-anywhere) already works
+> for installing Finix—use that for your deployments. This fork uses a native
+> Finix installer instead: **“Finix all the way down.”**
+
 Install [Finix](https://github.com/finix-community/finix) over SSH, straight from
 Ubuntu. Uses a native Finix RAM installer and disko—no NixOS installer required.
 
